@@ -8,6 +8,7 @@ from torch.distributions import Categorical
 from sortedcontainers import SortedList
 import random
 import numpy as np
+import random
 
 
 class BehaviourNetwork(nn.Module):
@@ -18,6 +19,7 @@ class BehaviourNetwork(nn.Module):
         hidden_dims=[32, 64, 64],
         activation=F.relu,
         lr=0.001,
+        device=th.device("cpu"),
     ):
         super(BehaviourNetwork, self).__init__()
         self.layers = nn.ModuleList([nn.Linear(state_dim + 2, hidden_dims[0])])
@@ -31,16 +33,16 @@ class BehaviourNetwork(nn.Module):
         self.activation = activation
         self.optimizer = optim.Adam(self.parameters())
 
+        self.device = device
+
     def forward(self, state, horizon, reward):
         x = th.cat([state, horizon, reward], dim=-1)
         for l in self.layers[:-1]:
-            state = self.activation(l(state))
-        return self.layers[-1](state)
+            x = self.activation(l(x))
+        return self.layers[-1](x)
 
     def choose_action(self, state, horizon, reward):
-        probs = (
-            self.forward(th.tensor(list(state) + [horizon] + [reward])).cpu().detach()
-        )
+        probs = F.softmax(self.forward(state, horizon, reward), dim=-1)
         m = Categorical(probs)
         return int(m.sample().numpy())
 
@@ -52,25 +54,46 @@ class BehaviourNetwork(nn.Module):
         self.loss.backward()
         self.optimizer.step()
 
-        return self.loss
+        return self.loss.cpu().detach()
+
+    def save(self, path):
+        th.save({"model": self.state_dict(), "opt": self.optimizer.state_dict()}, path)
+
+    def load(self, path):
+        data = th.load(path, map_location=self.device)
+        self.load_state_dict(data["model"])
+        self.optimizer.load_state_dict(data["opt"])
 
 
-class ReplayBuffer:
-    def __init__(self, max_size=1000):
-        self.buffer = SortedList(key=lambda x: -x[2])
+class EpisodeBuffer:
+    def __init__(self, max_size: int = 1000, seed=0):
+        self.buffer = SortedList(key=lambda x: -x[1])
         self.max_size = max_size
+        self.size = 0
+        self.eps_size = 0
+        self.rg = np.random.RandomState(seed)
 
-    def add(self, state, horizon, reward, action):
-        while len(self.buffer) >= self.max_size:
-            self.buffer.pop()
-        self.buffer.add([state, horizon, reward, action])
+    def add(self, episode, total_reward):
+        while self.eps_size >= self.max_size:
+            _, _, l = self.buffer.pop(-1)
+            self.size -= l
+            self.eps_size -= 1
+        self.buffer.add([episode, total_reward, len(episode)])
+        self.size += len(episode)
+        self.eps_size += 1
 
-    def pop(self):
-        self.buffer.pop()
-
-    def sample(self, size: int):
-        return random.sample(self.buffer, min(size, len(self.buffer)))
-
-    def size(self):
-        return len(self.buffer)
+    def sample(self, size):
+        size = min(size, self.size)
+        ep_sizes = np.array([x[2] for x in self.buffer])
+        #probs = 1 / ep_sizes
+        #probs = probs / probs.sum()
+        batch = []
+        ep_idxs = self.rg.choice(range(len(self.buffer)), size)  #, p=probs)
+        for i in ep_idxs:
+            ep = self.buffer[i][0]
+            idx = self.rg.randint(len(ep))
+            batch.append(
+                [ep[idx][0], ep[idx][-2], ep[idx][-1], ep[idx][1]]
+            )  # State, Horizon, Desired_Reward, Action
+        return batch
 

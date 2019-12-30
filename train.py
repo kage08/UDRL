@@ -1,18 +1,32 @@
-from model import ReplayBuffer, BehaviourNetwork
+from model import BehaviourNetwork, EpisodeBuffer
 import numpy as np
 import gym
 import yaml
 import torch.nn.functional as F
 import os
 from torch.utils.tensorboard import SummaryWriter
+import torch as th
+import argparse
 
 
-ENV_NAME = "LunarLander-v2"
+parser = argparse.ArgumentParser(description="ƃuıuɹɐǝן ʇuǝɯǝɔɹoɟuıǝɹ")
+parser.add_argument("--config", dest="conf_file", type=str, default="config.yml")
+args = parser.parse_args()
 
 
-def update_network(
-    net: BehaviourNetwork, optimizer, buffer: ReplayBuffer, batch_size: int = 32
-):
+with open(args.conf_file, "r") as fl:
+    config = yaml.load(fl)
+
+rg = np.random.RandomState(config["seed"])
+
+device = (
+    th.device("gpu")
+    if th.cuda.is_available() and config["use_cuda"]
+    else th.device("cpu")
+)
+
+
+def update_network(net: BehaviourNetwork, buffer: EpisodeBuffer, batch_size: int = 32):
     batch = buffer.sample(batch_size)
     states, horizons, rewards, actions = [], [], [], []
     for s, h, r, a in batch:
@@ -20,38 +34,63 @@ def update_network(
         horizons.append([h])
         rewards.append([r])
         actions.append(a)
-    states = np.array(states, dtype=np.float32)
-    horizons = np.array(horizons, dtype=np.float32)
-    rewards = np.array(rewards, dtype=np.float32)
-    actions = np.array(actions, dtype=np.float32)
+    states = th.tensor(np.array(states, dtype=np.float32))
+    horizons = th.tensor(np.array(horizons, dtype=np.float32))
+    rewards = th.tensor(np.array(rewards, dtype=np.float32))
+    actions = th.tensor(np.array(actions, dtype=np.long))
 
-    net.update(states, horizons, rewards, actions)
+    loss = net.update(states, horizons, rewards, actions)
+    return float(loss.cpu().numpy())
 
 
-def sample_trajectory(
-    env, tot_reward, time_steps, bnet: BehaviourNetwork, render=False, rand=False
-):
-    bnet.eval()
+def sample_trajectory(env, tot_reward, time_steps, bnet, render=False, rand=False):
+    if not rand:
+        bnet.eval()
     state = env.reset()
     done = False
     rollout = []
+    rws = 0
+    t = 0
     while not done and time_steps > 0:
         if rand:
             action = env.action_space.sample()
         else:
-            action = bnet.choose_action(state, float(time_steps), float(tot_reward))
+            action = bnet.choose_action(th.tensor(state), th.tensor([float(time_steps)]), th.tensor([float(tot_reward)]))
         s1, r, done, _ = env.step(action)
-        rollout.append([state.copy(), time_steps, tot_reward, action])
+        #rollout.append([state.copy(), action, r, time_steps, tot_reward])
+        rollout.append([state.copy(), action, r])
         state = s1
         tot_reward -= r
         time_steps -= 1
         if render:
             env.render()
-    return rollout
+        rws += r
+        t += 1
+
+    tot_rws = rws
+    for i, x in enumerate(rollout):
+        x.append(t - i)
+        x.append(rws)
+        rws -= x[2]
+
+    return rollout, tot_rws
 
 
-with open("config.yml", "r") as fl:
-    config = yaml.load(fl)
+def get_explr_commands(buffer: EpisodeBuffer, num_sample_last: int = 100):
+    r = []
+    lens = []
+    for _, reward, l in buffer.buffer[:num_sample_last]:
+        r.append(reward)
+        lens.append(l)
+    mean_r = np.mean(r)
+    std_r = np.std(r)
+    mean_l = np.mean(lens)
+
+    def foo():
+        return mean_r + rg.rand() * std_r, mean_l
+
+    return foo
+
 
 env = gym.make(config["env_name"])
 
@@ -61,18 +100,63 @@ bnet = BehaviourNetwork(
     config["hidden_dims"],
     activation=F.relu if config["activation"] == "relu" else F.tanh,
     lr=config["learning_rate"],
-)
+    device=device,
+).to(device)
 
-buffer = ReplayBuffer(max_size=config["buffer_size"])
+buffer = EpisodeBuffer(max_size=config["buffer_size"])
 
 
 log_dir = os.path.join("logs", config["log_file"])
 os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir=log_dir, flush_secs=30)
 
-for _ in range(config['num_warmup']):
-    trajs = sample_trajectory(env, 1000, 100000, bnet, rand=True)
-    for s,h,r,a in trajs:
-        buffer.add(s,h,r,a)
+rws = []
+for _ in range(config["num_warmup"]):
+    trj, rw = sample_trajectory(env, 1000, 100000, bnet, rand=True)
+    buffer.add(trj, rw)
+    rws.append(rw)
+mean_rw = np.mean(rws)
+print(f"Random average reward: {mean_rw}")
+writer.add_scalar("Reward", mean_rw, 0)
+ep = 1
+best_rw = mean_rw
+losses = []
+for _ in range(config["num_steps_update"]):
+    update_network(bnet, buffer, config["batch_size"])
+    loss = update_network(bnet, buffer, config["batch_size"])
+    losses.append(loss)
+loss = np.mean(losses)
+writer.add_scalar("Behaviour Network Loss", loss, ep)
 
-#TODO: Keep Track of samples from each episode and their returns 
+
+while ep <= config["max_episodes"]:
+    if ep % config["num_episodes_update"] == 0:
+        losses = []
+        for i in range(config["num_steps_update"]):
+            loss = update_network(bnet, buffer, config["batch_size"])
+            losses.append(loss)
+        loss = np.mean(losses)
+        writer.add_scalar("Behaviour Network Loss", loss, ep)
+        print(f"Episode {ep}: Loss {loss}")
+
+    explr_foo = get_explr_commands(buffer, config["num_sample_last"])
+    r, l = explr_foo()
+
+    trj, rw = sample_trajectory(env, r, l, bnet)
+    buffer.add(trj, rw)
+
+    if ep % config["eval_every"] == 0:
+        r, l = explr_foo()
+        rws = []
+        for _ in range(config["eval_num_episodes"]):
+            _, rw = sample_trajectory(env, r, l, bnet)
+            rws.append(rw)
+        mean_rw = np.mean(rws)
+        print(f"Episode: {ep}: Mean Reward: {mean_rw:.3f}")
+        writer.add_scalar("Reward", mean_rw, ep)
+
+        if mean_rw > best_rw:
+            file_name = os.path.join(log_dir, f"model_ep_{ep}.pth")
+            bnet.save(file_name)
+
+    ep += 1

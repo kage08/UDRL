@@ -1,4 +1,6 @@
 {
+    seed: 0,    
+
     # Network Hyperparameters
     hidden_dims: [32, 64, 64],
     learning_rate: 0.001,
@@ -15,10 +17,15 @@
     return_scale: 0.02,
     max_episodes: 10000,
 
+    eval_every: 100,
+    eval_num_episodes: 100,
+
     # RL parameters
     env_name: LunarLander-v2,
 
     #Logging and saving
     log_file: TestNet,
     save_updates: 100,
+
+    use_cuda: True,
 }
