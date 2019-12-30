@@ -5,7 +5,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.distributions import Categorical
-from sortedcontainers import SortedList
+from sortedcontainers import SortedList, SortedDict
 import random
 import numpy as np
 import random
@@ -44,7 +44,7 @@ class BehaviourNetwork(nn.Module):
     def choose_action(self, state, horizon, reward):
         probs = F.softmax(self.forward(state, horizon, reward), dim=-1)
         m = Categorical(probs)
-        return int(m.sample().numpy())
+        return int(m.sample().cpu().numpy())
 
     def update(self, states, horizons, rewards, actions):
         self.train()
@@ -72,15 +72,22 @@ class EpisodeBuffer:
         self.size = 0
         self.eps_size = 0
         self.rg = np.random.RandomState(seed)
+        self.ct = 0
+        self.pop_ct = 0
 
     def add(self, episode, total_reward):
         while self.eps_size >= self.max_size:
-            _, _, l = self.buffer.pop(-1)
-            self.size -= l
+            for x in self.buffer:
+                if x[-1] == self.pop_ct: break
+            self.buffer.remove(x)
+            self.size -= x[2]
             self.eps_size -= 1
-        self.buffer.add([episode, total_reward, len(episode)])
+            self.pop_ct += 1
+        data = [episode, total_reward, len(episode), self.ct]
+        self.buffer.add(data)
         self.size += len(episode)
         self.eps_size += 1
+        self.ct += 1
 
     def sample(self, size):
         size = min(size, self.size)
@@ -97,3 +104,4 @@ class EpisodeBuffer:
             )  # State, Horizon, Desired_Reward, Action
         return batch
 
+l = SortedDict({}, )

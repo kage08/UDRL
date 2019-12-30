@@ -1,5 +1,5 @@
 {
-    seed: 0,    
+    seed: 10,    
 
     # Network Hyperparameters
     hidden_dims: [32, 64, 64],
@@ -8,23 +8,24 @@
 
     # training
     batch_size: 32,
-    buffer_size: 1000,
+    buffer_size: 500,
     num_warmup: 50,
     num_sample_last: 75,
-    num_episodes_update: 10,
-    num_steps_update: 200,
-    horizon_scale: 0.02,
-    return_scale: 0.02,
-    max_episodes: 10000,
+    num_episodes_update: 30,
+    num_steps_update: 300,
+    reward_norm_factor: 100.0,
+    time_norm_factor: 100.0,
+    max_episodes: 100000,
+    epsilon: 0.2,
 
     eval_every: 100,
     eval_num_episodes: 100,
 
     # RL parameters
-    env_name: LunarLander-v2,
+    env_name: CartPole-v0,
 
     #Logging and saving
-    log_file: TestNet,
+    log_file: EpsLifoTestNet10,
     save_updates: 100,
 
     use_cuda: True,

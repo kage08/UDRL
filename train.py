@@ -15,7 +15,7 @@ args = parser.parse_args()
 
 
 with open(args.conf_file, "r") as fl:
-    config = yaml.load(fl)
+    config = yaml.load(fl, Loader=yaml.FullLoader)
 
 rg = np.random.RandomState(config["seed"])
 
@@ -43,7 +43,9 @@ def update_network(net: BehaviourNetwork, buffer: EpisodeBuffer, batch_size: int
     return float(loss.cpu().numpy())
 
 
-def sample_trajectory(env, tot_reward, time_steps, bnet, render=False, rand=False):
+def sample_trajectory(
+    env, tot_reward, time_steps, bnet, render=False, rand=False, config=config, evaluate=False,
+):
     if not rand:
         bnet.eval()
     state = env.reset()
@@ -52,13 +54,17 @@ def sample_trajectory(env, tot_reward, time_steps, bnet, render=False, rand=Fals
     rws = 0
     t = 0
     while not done and time_steps > 0:
-        if rand:
+        if rand or (not evaluate and rg.rand() < config["epsilon"]):
             action = env.action_space.sample()
         else:
-            action = bnet.choose_action(th.tensor(state), th.tensor([float(time_steps)]), th.tensor([float(tot_reward)]))
+            action = bnet.choose_action(
+                th.tensor(state, dtype=th.float32),
+                th.tensor([float(time_steps)]),
+                th.tensor([float(tot_reward)]),
+            )
         s1, r, done, _ = env.step(action)
-        #rollout.append([state.copy(), action, r, time_steps, tot_reward])
-        rollout.append([state.copy(), action, r])
+        # rollout.append([state.copy(), action, r, time_steps, tot_reward])
+        rollout.append([state.copy(), action, r / config["reward_norm_factor"]])
         state = s1
         tot_reward -= r
         time_steps -= 1
@@ -69,8 +75,8 @@ def sample_trajectory(env, tot_reward, time_steps, bnet, render=False, rand=Fals
 
     tot_rws = rws
     for i, x in enumerate(rollout):
-        x.append(t - i)
-        x.append(rws)
+        x.append((t - i) / config["time_norm_factor"])
+        x.append(rws / config["reward_norm_factor"])
         rws -= x[2]
 
     return rollout, tot_rws
@@ -79,7 +85,7 @@ def sample_trajectory(env, tot_reward, time_steps, bnet, render=False, rand=Fals
 def get_explr_commands(buffer: EpisodeBuffer, num_sample_last: int = 100):
     r = []
     lens = []
-    for _, reward, l in buffer.buffer[:num_sample_last]:
+    for _, reward, l, _ in buffer.buffer[:num_sample_last]:
         r.append(reward)
         lens.append(l)
     mean_r = np.mean(r)
@@ -89,7 +95,7 @@ def get_explr_commands(buffer: EpisodeBuffer, num_sample_last: int = 100):
     def foo():
         return mean_r + rg.rand() * std_r, mean_l
 
-    return foo
+    return foo, mean_r, mean_l
 
 
 env = gym.make(config["env_name"])
@@ -111,13 +117,19 @@ os.makedirs(log_dir, exist_ok=True)
 writer = SummaryWriter(log_dir=log_dir, flush_secs=30)
 
 rws = []
+trs = []
 for _ in range(config["num_warmup"]):
     trj, rw = sample_trajectory(env, 1000, 100000, bnet, rand=True)
     buffer.add(trj, rw)
     rws.append(rw)
+    trs.append(trj)
+mean_l = np.mean([len(t) for t in trs])
 mean_rw = np.mean(rws)
 print(f"Random average reward: {mean_rw}")
-writer.add_scalar("Reward", mean_rw, 0)
+writer.add_scalars("Rewards", {"Actual Reward": mean_rw, "Target Reward": mean_rw}, 0)
+writer.add_scalars("Times", {"Actual Times": mean_l, "Target Times": mean_l}, 0)
+
+
 ep = 1
 best_rw = mean_rw
 losses = []
@@ -139,7 +151,9 @@ while ep <= config["max_episodes"]:
         writer.add_scalar("Behaviour Network Loss", loss, ep)
         print(f"Episode {ep}: Loss {loss}")
 
-    explr_foo = get_explr_commands(buffer, config["num_sample_last"])
+    explr_foo, mean_rew, mean_len = get_explr_commands(
+        buffer, config["num_sample_last"]
+    )
     r, l = explr_foo()
 
     trj, rw = sample_trajectory(env, r, l, bnet)
@@ -148,12 +162,21 @@ while ep <= config["max_episodes"]:
     if ep % config["eval_every"] == 0:
         r, l = explr_foo()
         rws = []
+        trs = []
         for _ in range(config["eval_num_episodes"]):
-            _, rw = sample_trajectory(env, r, l, bnet)
+            tr, rw = sample_trajectory(env, r, l, bnet, evaluate=True)
+            trs.append(tr)
             rws.append(rw)
+        tr, rw = sample_trajectory(env, r, l, bnet, evaluate=True, render=True)
+        mean_l = np.mean([len(t) for t in trs])
         mean_rw = np.mean(rws)
         print(f"Episode: {ep}: Mean Reward: {mean_rw:.3f}")
-        writer.add_scalar("Reward", mean_rw, ep)
+        writer.add_scalars(
+            "Rewards", {"Actual Reward": mean_rw, "Target Reward": mean_rew}, ep
+        )
+        writer.add_scalars(
+            "Times", {"Actual Times": mean_l, "Target Times": mean_len}, ep
+        )
 
         if mean_rw > best_rw:
             file_name = os.path.join(log_dir, f"model_ep_{ep}.pth")
