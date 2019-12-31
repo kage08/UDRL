@@ -53,7 +53,7 @@ def sample_trajectory(
     rollout = []
     rws = 0
     t = 0
-    while not done and time_steps > 0:
+    while not done:
         if rand or (not evaluate and rg.rand() < config["epsilon"]):
             action = env.action_space.sample()
         else:
