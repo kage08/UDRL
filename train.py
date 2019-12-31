@@ -20,7 +20,7 @@ with open(args.conf_file, "r") as fl:
 rg = np.random.RandomState(config["seed"])
 
 device = (
-    th.device("gpu")
+    th.device("cuda")
     if th.cuda.is_available() and config["use_cuda"]
     else th.device("cpu")
 )
@@ -34,10 +34,10 @@ def update_network(net: BehaviourNetwork, buffer: EpisodeBuffer, batch_size: int
         horizons.append([h/ config["time_norm_factor"]])
         rewards.append([r/ config["reward_norm_factor"]])
         actions.append(a)
-    states = th.tensor(np.array(states, dtype=np.float32))
-    horizons = th.tensor(np.array(horizons, dtype=np.float32))
-    rewards = th.tensor(np.array(rewards, dtype=np.float32))
-    actions = th.tensor(np.array(actions, dtype=np.long))
+    states = th.tensor(np.array(states, dtype=np.float32)).to(device)
+    horizons = th.tensor(np.array(horizons, dtype=np.float32)).to(device)
+    rewards = th.tensor(np.array(rewards, dtype=np.float32)).to(device)
+    actions = th.tensor(np.array(actions, dtype=np.long)).to(device)
 
     loss = net.update(states, horizons, rewards, actions)
     return float(loss.cpu().numpy())
@@ -58,9 +58,9 @@ def sample_trajectory(
             action = env.action_space.sample()
         else:
             action = bnet.choose_action(
-                th.tensor(state, dtype=th.float32),
-                th.tensor([float(time_steps)/ config["time_norm_factor"]]),
-                th.tensor([float(tot_reward)/ config["reward_norm_factor"]]),
+                th.tensor(state, dtype=th.float32).to(device),
+                th.tensor([float(time_steps)/ config["time_norm_factor"]]).to(device),
+                th.tensor([float(tot_reward)/ config["reward_norm_factor"]]).to(device),
             )
         s1, r, done, _ = env.step(action)
         # rollout.append([state.copy(), action, r, time_steps, tot_reward])
