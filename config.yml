@@ -16,16 +16,16 @@
     reward_norm_factor: 100.0,
     time_norm_factor: 100.0,
     max_episodes: 100000,
-    epsilon: 0.2,
+    epsilon: 0.0,
 
     eval_every: 100,
     eval_num_episodes: 100,
 
     # RL parameters
-    env_name: CartPole-v0,
+    env_name: LunarLander-v2,
 
     #Logging and saving
-    log_file: EpsLifoTestNet10,
+    log_file: NoEpsLifoTestNet10,
     save_updates: 100,
 
     use_cuda: True,

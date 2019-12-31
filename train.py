@@ -31,8 +31,8 @@ def update_network(net: BehaviourNetwork, buffer: EpisodeBuffer, batch_size: int
     states, horizons, rewards, actions = [], [], [], []
     for s, h, r, a in batch:
         states.append(s)
-        horizons.append([h])
-        rewards.append([r])
+        horizons.append([h/ config["time_norm_factor"]])
+        rewards.append([r/ config["reward_norm_factor"]])
         actions.append(a)
     states = th.tensor(np.array(states, dtype=np.float32))
     horizons = th.tensor(np.array(horizons, dtype=np.float32))
@@ -59,12 +59,12 @@ def sample_trajectory(
         else:
             action = bnet.choose_action(
                 th.tensor(state, dtype=th.float32),
-                th.tensor([float(time_steps)]),
-                th.tensor([float(tot_reward)]),
+                th.tensor([float(time_steps)/ config["time_norm_factor"]]),
+                th.tensor([float(tot_reward)/ config["reward_norm_factor"]]),
             )
         s1, r, done, _ = env.step(action)
         # rollout.append([state.copy(), action, r, time_steps, tot_reward])
-        rollout.append([state.copy(), action, r / config["reward_norm_factor"]])
+        rollout.append([state.copy(), action, r])
         state = s1
         tot_reward -= r
         time_steps -= 1
@@ -75,8 +75,8 @@ def sample_trajectory(
 
     tot_rws = rws
     for i, x in enumerate(rollout):
-        x.append((t - i) / config["time_norm_factor"])
-        x.append(rws / config["reward_norm_factor"])
+        x.append((t - i) )
+        x.append(rws)
         rws -= x[2]
 
     return rollout, tot_rws
@@ -119,7 +119,7 @@ writer = SummaryWriter(log_dir=log_dir, flush_secs=30)
 rws = []
 trs = []
 for _ in range(config["num_warmup"]):
-    trj, rw = sample_trajectory(env, 1000, 100000, bnet, rand=True)
+    trj, rw = sample_trajectory(env, 100, 100, bnet, rand=True)
     buffer.add(trj, rw)
     rws.append(rw)
     trs.append(trj)
