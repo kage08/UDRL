@@ -72,6 +72,7 @@ def sample_trajectory(
             env.render()
         rws += r
         t += 1
+        config["epsilon"] = max(config["epsilon_min"], (1-config["epsilon_decay"])*config["epsilon"])
 
     tot_rws = rws
     for i, x in enumerate(rollout):
@@ -104,7 +105,7 @@ bnet = BehaviourNetwork(
     env.observation_space.shape[0],
     env.action_space.n,
     config["hidden_dims"],
-    activation=F.relu if config["activation"] == "relu" else F.tanh,
+    activation=th.relu if config["activation"] == "relu" else th.tanh,
     lr=config["learning_rate"],
     device=device,
 ).to(device)
@@ -167,7 +168,7 @@ while ep <= config["max_episodes"]:
             tr, rw = sample_trajectory(env, r, l, bnet, evaluate=True)
             trs.append(tr)
             rws.append(rw)
-        tr, rw = sample_trajectory(env, r, l, bnet, evaluate=True, render=True)
+        #tr, rw = sample_trajectory(env, r, l, bnet, evaluate=True, render=True)
         mean_l = np.mean([len(t) for t in trs])
         mean_rw = np.mean(rws)
         print(f"Episode: {ep}: Mean Reward: {mean_rw:.3f}")

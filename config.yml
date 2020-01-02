@@ -17,6 +17,8 @@
     time_norm_factor: 100.0,
     max_episodes: 100000,
     epsilon: 0.0,
+    epsilon_decay: 0.00001,
+    epsilon_min: 0.0,
 
     eval_every: 100,
     eval_num_episodes: 100,

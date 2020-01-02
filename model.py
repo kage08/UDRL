@@ -91,8 +91,9 @@ class EpisodeBuffer:
 
     def sample(self, size):
         size = min(size, self.size)
-        ep_sizes = np.array([x[2] for x in self.buffer])
-        #probs = 1 / ep_sizes
+        ep_sizes = np.array([x[1] for x in self.buffer])
+        probs = np.exp(ep_sizes)
+        probs /= probs.sum()
         #probs = probs / probs.sum()
         batch = []
         ep_idxs = self.rg.choice(range(len(self.buffer)), size)  #, p=probs)
